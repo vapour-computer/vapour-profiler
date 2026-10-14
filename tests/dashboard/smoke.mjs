@@ -26,6 +26,9 @@ const trace=[{type:'metadata',format:'vpt',version:1,source:'browser',profile:'c
   ...Array.from({length:120},(_,i)=>({type:'frame',timeMs:(i+1)*16,durationMs:i===90?80:16,spike:i===90})),
   {type:'memory',kind:'grow',timeMs:2000,fromBytes:65536,toBytes:131072},
   {type:'stack',stack:'main;planted_slow_loop',samples:80},{type:'stack',stack:'main;update',samples:5},
+  {type:'asset',id:'hero',name:'textures/hero.png',kind:'texture',startMs:100,endMs:1500,bytes:4000000,decodeMs:300,texture:{width:2048,height:2048,format:'rgba8',mips:true}},
+  {type:'asset',id:'icon',name:'ui/icon.png',kind:'texture',startMs:200,endMs:260,bytes:2000,texture:{width:64,height:64,format:'rgba8'}},
+  {type:'asset',id:'music',name:'audio/theme.ogg',kind:'audio',startMs:2000,endMs:2400,bytes:900000,failed:true},
   {type:'end',durationMs:3000,dropped:{}}].map(JSON.stringify).join('\n');
 let browser;
 try{
@@ -45,6 +48,17 @@ try{
   await page.locator('#file').setInputFiles({name:'capture.vpt',mimeType:'application/x-ndjson',buffer:Buffer.from(trace)});
   await page.waitForFunction(()=>document.querySelector('#functions').textContent.includes('planted_slow_loop'));
   assert.equal(await page.locator('#spikes').textContent(),'1');
+  await page.waitForFunction(()=>document.querySelectorAll('#asset-rows tr').length===3);
+  assert.match(await page.locator('#asset-rows tr').first().textContent(),/textures\/hero\.png/);
+  assert.match(await page.locator('#asset-rows tr').first().textContent(),/21\.33/);
+  assert.match(await page.locator('#asset-note').textContent(),/3 assets · 1 failed/);
+  await page.locator('th[data-sort="name"]').click();
+  assert.match(await page.locator('#asset-rows tr').first().textContent(),/audio\/theme\.ogg/);
+  await page.locator('#asset-rows tr',{hasText:'theme.ogg'}).click();
+  {const start=Number(await page.locator('#range-start').inputValue());assert.ok(start>35&&start<45,String(start));}
+  await page.locator('#reset-range').click();
+  const lane=await page.locator('#asset-lanes').boundingBox();assert.ok(lane.height>30);
+  assert.equal((await viewer.api('assets')).status,200);
   await page.locator('#offline').click();
   await page.waitForFunction(()=>document.querySelector('#report').textContent.includes('planted_slow_loop'));
   assert.match(await page.locator('#report').textContent(),/Sustained memory growth/);

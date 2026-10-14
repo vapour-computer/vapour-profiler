@@ -83,6 +83,7 @@ No CORS wildcard or private-network access header is sent.
 | `POST /api/start` | Starts collection for the CLI-authorized PID only |
 | `POST /api/trace` | Raw UTF-8 `.vpt`; validated before replacing inactive view |
 | `GET /api/trace` | Current retained trace; active capture export is partial |
+| `GET /api/assets` | Per-asset cost report (ranked by hardness) from the retained trace's `asset` records; empty without them |
 | `POST /api/analyze` | `{offline: true}` or `{offline: false, model: "claude-sonnet-4-6"}` |
 | `POST /api/key` | `{key: "..."}`; stores in OS keyring, never echoes |
 | `POST /api/key/remove` | Removes keyring entry; env key must be unset in the shell |

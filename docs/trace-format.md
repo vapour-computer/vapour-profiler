@@ -9,7 +9,7 @@ This is a data contract; producers need no profiler code dependency.
 
 The first record is exactly one `metadata` record with `format: "vpt"` and
 `version: 1`. Subsequent records are `metrics`, `frame`, `memory`, `stack`,
-`spike` or opt-in `probe`. A completed dump ends with exactly one `end` record.
+`spike`, `asset` or opt-in `probe`. A completed dump ends with exactly one `end` record.
 A partial, interrupted capture may omit `end`; readers must label it partial.
 Reject duplicate metadata, unsupported versions, records after end, oversized
 input, and non-finite numbers. Times are milliseconds relative to capture start,
@@ -34,6 +34,18 @@ monotonic within each record kind; different kinds can be grouped. Wall-clock
   A single symbol is a valid one-frame stack; no unavailable callers are fabricated.
 - **Spikes:** bounded contextual windows; available stacks, thread CPU and memory
   events only. Optional native probe aggregates use the `probe` record.
+- **Assets:** one record per loaded asset, written when the load finishes (so
+  `asset` records are not time-ordered and are exempt from the monotonic rule).
+  Required: unique `id`, `name` (URL or path), `kind` (`texture`, `mesh`, `audio`,
+  `shader`, `wasm`, `data`, `other`), `startMs`, `endMs` (>= `startMs`). Optional
+  producer-measured facts: `bytes` (transferred), `decodeMs`, `jsHeapDeltaBytes` /
+  `wasmDeltaBytes` (signed, measured around the load), `failed`, and for textures
+  `texture{width,height,format,mips,layers}`. Producers report facts only; the
+  analyzer derives estimated GPU bytes (`w*h*bytesPerPixel*mips(4/3)*layers`, RGBA8
+  assumed for unknown formats) and correlates RSS/CPU from `metrics` over the
+  load window, splitting between overlapping loads. Those derived values are
+  approximate and labeled so. This record was added to v1 additively before any
+  consumer release; a later breaking change must bump `version`.
 - **End:** capture duration and dropped/overwritten record counts by kind. A
   bounded ring dump contains only retained data, and summaries must say so.
 
