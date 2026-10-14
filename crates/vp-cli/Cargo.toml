@@ -12,3 +12,4 @@ publish = false
 anyhow.workspace = true
 clap.workspace = true
 vp-agent.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
