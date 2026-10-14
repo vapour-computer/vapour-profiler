@@ -1,0 +1,10 @@
+Vapour Profiler licensing
+
+Userspace Rust code, test fixtures, scripts, and documentation are licensed,
+at your option, under either MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
+
+BPF C programs in crates/vp-bpf/bpf/ are licensed under GPL-2.0-only
+(LICENSE-GPL-2.0). Their kernel license declaration is "GPL" to enable
+GPL-only BPF helpers. Embedding those programs does not relicense them.
+
+Third-party dependencies retain their own licenses.

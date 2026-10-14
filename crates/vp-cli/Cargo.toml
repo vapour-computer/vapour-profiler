@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+[package]
+name = "vapour-profiler"
+description = "Standalone local eBPF profiler for Wasm runtimes and Linux processes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+vp-agent.workspace = true

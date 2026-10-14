@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT OR Apache-2.0
+[workspace]
+members = ["crates/vp-bpf", "crates/vp-agent", "crates/vp-adapters", "crates/vp-analyze", "crates/vp-cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+libbpf-rs = "=0.27.2"
+libbpf-cargo = "=0.27.2"
+libc = "0.2"
+signal-hook = "0.3"
+vp-bpf = { path = "crates/vp-bpf", version = "0.1.0" }
+vp-agent = { path = "crates/vp-agent", version = "0.1.0" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
