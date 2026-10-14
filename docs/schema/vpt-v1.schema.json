@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/vapour-computer/vapour-profiler/main/docs/schema/vpt-v1.schema.json",
+  "title": "Vapour Profiler Trace v1 — one JSONL record",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["type", "format", "version", "source", "startedAt", "profile"],
+      "properties": {
+        "type": { "const": "metadata" }, "format": { "const": "vpt" }, "version": { "const": 1 },
+        "source": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "profile": { "enum": ["lite", "full", "custom"] },
+        "adapter": { "type": "string", "maxLength": 128 },
+        "runtimeVersion": { "type": "string", "maxLength": 256 },
+        "kernel": { "type": "string", "maxLength": 256 },
+        "cpu": { "type": "string", "maxLength": 256 },
+        "gameId": { "type": "string", "maxLength": 128 },
+        "capabilities": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object", "required": ["type", "timeMs", "values"],
+      "properties": {
+        "type": { "const": "metrics" }, "timeMs": { "$ref": "#/$defs/time" },
+        "values": {
+          "type": "object",
+          "properties": {
+            "fps": { "$ref": "#/$defs/nullableNumber" },
+            "averageFps": { "$ref": "#/$defs/nullableNumber" },
+            "low1Fps": { "$ref": "#/$defs/nullableNumber" },
+            "low01Fps": { "$ref": "#/$defs/nullableNumber" },
+            "minFps": { "$ref": "#/$defs/nullableNumber" },
+            "frameTimeMs": { "$ref": "#/$defs/nullableNumber" },
+            "over16_6MsPercent": { "$ref": "#/$defs/nullablePercent" },
+            "over33_3MsPercent": { "$ref": "#/$defs/nullablePercent" },
+            "mainThreadBusyPercent": { "$ref": "#/$defs/nullablePercent" },
+            "busySource": { "enum": ["longtask", "long-animation-frame", "unsupported"] },
+            "cpuOneCorePercent": { "$ref": "#/$defs/nullableNumber" },
+            "cpuMachinePercent": { "$ref": "#/$defs/nullablePercent" },
+            "rssBytes": { "$ref": "#/$defs/nullableBytes" },
+            "pssBytes": { "$ref": "#/$defs/nullableBytes" },
+            "wasmBytes": { "$ref": "#/$defs/nullableBytes" },
+            "wasmPeakBytes": { "$ref": "#/$defs/nullableBytes" },
+            "jsHeapBytes": { "$ref": "#/$defs/nullableBytes" },
+            "wasmGrowthBytesPerSecond": { "type": ["number", "null"] },
+            "growEvents": { "$ref": "#/$defs/count" },
+            "droppedFrames": { "$ref": "#/$defs/count" },
+            "droppedBusyIntervals": { "$ref": "#/$defs/count" },
+            "visibility": { "enum": ["visible", "hidden"] },
+            "threads": { "type": "array", "maxItems": 4096, "items": { "type": "object" } }
+          },
+          "additionalProperties": false
+        }
+      }, "additionalProperties": false
+    },
+    {
+      "type": "object", "required": ["type", "timeMs", "durationMs", "spike"],
+      "properties": { "type": { "const": "frame" }, "timeMs": { "$ref": "#/$defs/time" },
+        "durationMs": { "type": "number", "exclusiveMinimum": 0 }, "spike": { "type": "boolean" } },
+      "additionalProperties": false
+    },
+    {
+      "type": "object", "required": ["type", "timeMs", "kind", "fromBytes", "toBytes"],
+      "properties": { "type": { "const": "memory" }, "timeMs": { "$ref": "#/$defs/time" },
+        "kind": { "const": "grow" }, "fromBytes": { "$ref": "#/$defs/count" }, "toBytes": { "$ref": "#/$defs/count" } },
+      "additionalProperties": false
+    },
+    {
+      "type": "object", "required": ["type", "stack", "samples"],
+      "properties": { "type": { "const": "stack" }, "stack": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "samples": { "type": "integer", "minimum": 1 }, "spike": { "type": "boolean" } },
+      "additionalProperties": false
+    },
+    {
+      "type": "object", "required": ["type", "startMs", "endMs"],
+      "properties": { "type": { "const": "spike" }, "startMs": { "$ref": "#/$defs/time" },
+        "endMs": { "$ref": "#/$defs/time" }, "stacks": { "type": "array", "maxItems": 256, "items": { "type": "string", "maxLength": 8192 } },
+        "threads": { "type": "array", "maxItems": 4096, "items": { "type": "object" } },
+        "memoryEvents": { "type": "array", "maxItems": 4096, "items": { "type": "object" } } },
+      "additionalProperties": false
+    },
+    {
+      "type": "object", "required": ["type", "probe", "values"],
+      "properties": { "type": { "const": "probe" }, "probe": { "enum": ["sched", "syscalls", "faults", "imports", "alloc"] },
+        "values": { "type": "object" } },
+      "additionalProperties": false
+    },
+    {
+      "type": "object", "required": ["type", "durationMs", "dropped"],
+      "properties": { "type": { "const": "end" }, "durationMs": { "$ref": "#/$defs/time" },
+        "dropped": { "type": "object", "additionalProperties": { "$ref": "#/$defs/count" } } },
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "time": { "type": "number", "minimum": 0 },
+    "count": { "type": "integer", "minimum": 0 },
+    "nullableNumber": { "type": ["number", "null"], "minimum": 0 },
+    "nullablePercent": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+    "nullableBytes": { "type": ["integer", "null"], "minimum": 0 }
+  }
+}
