@@ -1,0 +1,11 @@
+{"type": "metadata", "format": "vpt", "version": 1, "source": "browser", "profile": "custom", "startedAt": "2026-10-14T00:00:00Z", "adapter": "asset-sample"}
+{"type": "metrics", "timeMs": 0, "values": {"rssBytes": 300000000, "cpuOneCorePercent": 5}}
+{"type": "metrics", "timeMs": 1000, "values": {"rssBytes": 310000000, "cpuOneCorePercent": 30}}
+{"type": "metrics", "timeMs": 2000, "values": {"rssBytes": 410000000, "cpuOneCorePercent": 95}}
+{"type": "metrics", "timeMs": 3000, "values": {"rssBytes": 411000000, "cpuOneCorePercent": 20}}
+{"type": "metrics", "timeMs": 4000, "values": {"rssBytes": 411000000, "cpuOneCorePercent": 5}}
+{"type": "asset", "id": "a", "name": "textures/ui-atlas.png", "kind": "texture", "startMs": 100, "endMs": 900, "bytes": 900000, "texture": {"width": 1024, "height": 1024, "format": "rgba8", "mips": true}}
+{"type": "asset", "id": "b", "name": "textures/terrain-8k.ktx2", "kind": "texture", "startMs": 1100, "endMs": 2900, "bytes": 24000000, "decodeMs": 900, "texture": {"width": 8192, "height": 8192, "format": "bc7", "mips": true}}
+{"type": "asset", "id": "c", "name": "models/city.glb", "kind": "mesh", "startMs": 1500, "endMs": 2200, "bytes": 3000000, "jsHeapDeltaBytes": 1000000}
+{"type": "asset", "id": "d", "name": "audio/theme.ogg", "kind": "audio", "startMs": 3100, "endMs": 3300, "bytes": 400000, "failed": true}
+{"type": "end", "durationMs": 4000, "dropped": {}}

@@ -52,3 +52,23 @@ sudo env PATH=/tmp/opencode/vp-toolchain/usr/bin:/usr/bin \
 With system bpftool installed, `sudo python3 tests/bpf_lifecycle.py` from the
 repo is sufficient. No overhead budget or Linux-5.15 compatibility measurement
 is claimed by these tests; those require their later workload/platform gates.
+
+## Asset observability (`asset` records)
+
+Verified by running real web builds in headless Chromium under
+`vapour-profiler dashboard --pid <chromium> --tree --autostart`, with a page hook
+that records network resources and WebGL/WebGPU texture and buffer creation:
+
+- **Godot** (TPS demo web export): passed. Real RSS/CPU, 136 assets, anonymous
+  textures because everything is packed in one `index.pck`.
+- **Bevy** (tutorial template, WebGL2 path): passed. Real asset file names, texture
+  sizes and formats. The WebGPU hook paths were written but not exercised.
+- **Unity**: **TODO, not tested properly.** Unity 2020.3.26f1 was installed, but a
+  headless WebGL build failed with `Failed to activate/update license`, so no Unity
+  build was ever run through the harness. The Unity-specific assumptions (separate
+  `.data`/`.wasm`/`.framework.js` files classified by extension, WebGL2 uploads for
+  the bundled textures) are unverified.
+
+The page hook and run harness are not in the repo yet; they were run from a scratch
+folder. Open question: GL buffers are counted as assets, which inflates the
+cumulative-size line on Godot.

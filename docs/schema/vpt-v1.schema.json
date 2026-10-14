@@ -82,6 +82,34 @@
       "additionalProperties": false
     },
     {
+      "type": "object", "required": ["type", "id", "name", "kind", "startMs", "endMs"],
+      "properties": {
+        "type": { "const": "asset" },
+        "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "kind": { "enum": ["texture", "mesh", "audio", "shader", "wasm", "data", "other"] },
+        "startMs": { "$ref": "#/$defs/time" },
+        "endMs": { "$ref": "#/$defs/time" },
+        "bytes": { "$ref": "#/$defs/count" },
+        "decodeMs": { "$ref": "#/$defs/time" },
+        "jsHeapDeltaBytes": { "type": "integer" },
+        "wasmDeltaBytes": { "type": "integer" },
+        "texture": {
+          "type": "object", "required": ["width", "height", "format"],
+          "properties": {
+            "width": { "type": "integer", "minimum": 1, "maximum": 65536 },
+            "height": { "type": "integer", "minimum": 1, "maximum": 65536 },
+            "format": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "mips": { "type": "boolean" },
+            "layers": { "type": "integer", "minimum": 1, "maximum": 4096 }
+          },
+          "additionalProperties": false
+        },
+        "failed": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    {
       "type": "object", "required": ["type", "probe", "values"],
       "properties": { "type": { "const": "probe" }, "probe": { "enum": ["sched", "syscalls", "faults", "imports", "alloc"] },
         "values": { "type": "object" } },

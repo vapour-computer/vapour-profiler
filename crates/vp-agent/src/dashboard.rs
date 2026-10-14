@@ -239,6 +239,10 @@ async fn import(State(app): State<Arc<App>>, body: axum::body::Bytes) -> ApiResu
     capture.records = records;
     Ok(Json(json!({"ok":true})))
 }
+async fn assets(State(app): State<Arc<App>>) -> Json<Value> {
+    let c = app.capture.lock().await;
+    Json(json!({"assets":vp_analyze::asset_report(&c.records)}))
+}
 async fn trace(State(app): State<Arc<App>>) -> Result<Response, (StatusCode, String)> {
     let c = app.capture.lock().await;
     if c.records.is_empty() {
@@ -452,6 +456,7 @@ pub async fn serve(
         .route("/api/live", get(socket))
         .route("/api/start", post(start))
         .route("/api/trace", get(trace).post(import))
+        .route("/api/assets", get(assets))
         .route(
             "/api/analyze",
             post(analyze).layer(DefaultBodyLimit::max(4096)),
