@@ -4,13 +4,15 @@
 Standalone, local-first eBPF performance observability for Wasm runtimes and
 Linux processes. No Vapour CLI, account, SDK, or service is required.
 
-**Status: step 1 — embedded CO-RE BPF attach/detach proof.** This is not yet the
-complete profiler. Metrics, adapters, TUI, traces, analysis, localhost API, and
+**Status: local dashboard + embedded CO-RE BPF attach/detach proof.** This is not yet the
+complete profiler. Native stack collection, runtime adapters, TUI and
 release distribution follow the [build plan](docs/build-plan.md). The workspace
 is deliberately unpublished until those acceptance gates pass.
 See the [verification record](docs/verification.md) for checks and pending gates.
-The planned local agent listens on `127.0.0.1:6767` for native and optional
-browser telemetry, synchronized with the Vapour CLI and active only on toggle.
+The local dashboard is available at `127.0.0.1:6767` after explicitly running
+`target/debug/vapour-profiler dashboard [--pid PID]`. Open the full token-bearing
+URL printed by the command. See [dashboard usage and current capabilities](docs/dashboard.md).
+Vapour CLI synchronization and automatic browser forwarding remain pending.
 
 ## Invariants
 
@@ -55,7 +57,7 @@ CO-RE view of `task_struct.tgid`, relocated against the running kernel's BTF.
 
 ## Step 1 attach/detach proof
 
-Only the development `probe-test` command is implemented:
+The standalone BPF proof uses the development `probe-test` command:
 
 ```sh
 target/probe-target &
@@ -117,10 +119,10 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 | Crate | Responsibility | Current state |
 | --- | --- | --- |
 | `vp-bpf` | C probes, CO-RE, embedded skeleton | Test uprobe |
-| `vp-agent` | Loading, lifecycle, collection, local API | Foreground proof |
+| `vp-agent` | Loading, lifecycle, collection, local API | BPF proof + local dashboard/process metrics |
 | `vp-adapters` | Runtime hook descriptions, JIT sources | Reserved |
-| `vp-analyze` | Deterministic summary, provider trait, validated report | Reserved |
-| `vp-cli` (`vapour-profiler`) | Standalone CLI and TUI | `probe-test` |
+| `vp-analyze` | Deterministic summary, provider trait, validated report | Trace validation, offline/Claude reports |
+| `vp-cli` (`vapour-profiler`) | Standalone CLI and TUI | `probe-test`, `dashboard` |
 
 Userspace: [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE).
 BPF C: [GPL-2.0-only](LICENSE-GPL-2.0). See [LICENSE](LICENSE).

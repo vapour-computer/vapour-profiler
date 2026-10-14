@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Foreground attach/detach proof. The full session lifecycle follows in step 2.
+pub mod dashboard;
 
 use std::{
     fs::{self, File},

@@ -2,3 +2,4 @@
 *.vpt
 *.folded
 __pycache__/
+node_modules/

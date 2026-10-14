@@ -16,6 +16,7 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo build --locked --workspace
+      - run: cargo test --locked -p vp-analyze
       - name: Build lifecycle fixture
         run: cc -O0 -g -Wall -Wextra -Werror -o target/probe-target tests/fixtures/probe-target.c
       - name: CLI is inert without an explicit capture
