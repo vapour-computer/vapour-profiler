@@ -5,18 +5,23 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::OnceLock;
 
 pub const MAX_TRACE: usize = 50 * 1024 * 1024;
-pub fn parse(text: &str) -> Result<Vec<Value>> {
-    if text.len() > MAX_TRACE {
-        bail!("Trace exceeds 50 MiB");
-    }
+
+fn schema_validator() -> &'static jsonschema::Validator {
     static SCHEMA: OnceLock<jsonschema::Validator> = OnceLock::new();
-    let validator = SCHEMA.get_or_init(|| {
+    SCHEMA.get_or_init(|| {
         jsonschema::validator_for(
             &serde_json::from_str::<Value>(include_str!("../../../docs/schema/vpt-v1.schema.json"))
                 .unwrap(),
         )
         .unwrap()
-    });
+    })
+}
+
+pub fn parse(text: &str) -> Result<Vec<Value>> {
+    if text.len() > MAX_TRACE {
+        bail!("Trace exceeds 50 MiB");
+    }
+    let validator = schema_validator();
     let mut records = Vec::new();
     let mut clocks = BTreeMap::new();
     let mut ended = false;
@@ -59,6 +64,68 @@ pub fn parse(text: &str) -> Result<Vec<Value>> {
     }
     if records.is_empty() {
         bail!("Empty trace");
+    }
+    Ok(records)
+}
+
+pub fn parse_append(text: &str, existing: &[Value]) -> Result<Vec<Value>> {
+    if text.len() > MAX_TRACE {
+        bail!("Trace exceeds 50 MiB");
+    }
+    let validator = schema_validator();
+    let mut records = Vec::new();
+    let mut clocks: BTreeMap<String, f64> = BTreeMap::new();
+    let mut asset_ids = BTreeSet::new();
+    for v in existing {
+        if let Some(kind) = v["type"].as_str() {
+            if let Some(time) = v["timeMs"].as_f64() {
+                let last = clocks.entry(kind.to_owned()).or_insert(0.);
+                if time > *last {
+                    *last = time;
+                }
+            }
+            if kind == "asset" {
+                if let Some(id) = v["id"].as_str() {
+                    asset_ids.insert(id.to_owned());
+                }
+            }
+        }
+    }
+    for (i, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if line.len() > 1024 * 1024 || existing.len() + records.len() >= 150_000 {
+            bail!("Trace record budget exceeded");
+        }
+        let v: Value = serde_json::from_str(line)
+            .with_context(|| format!("Invalid JSON at line {}", i + 1))?;
+        if !validator.is_valid(&v) {
+            bail!("Schema violation at line {}", i + 1);
+        }
+        let kind = v["type"].as_str().unwrap_or_default();
+        if matches!(kind, "metadata" | "end") {
+            bail!("Only non-terminal records can be appended");
+        }
+        if let Some(time) = v["timeMs"].as_f64() {
+            if time < *clocks.get(kind).unwrap_or(&0.) {
+                bail!("Non-monotonic timestamps");
+            }
+            clocks.insert(kind.to_owned(), time);
+        }
+        if kind == "spike" && v["endMs"].as_f64() < v["startMs"].as_f64() {
+            bail!("Invalid spike interval");
+        }
+        if kind == "asset" {
+            if v["endMs"].as_f64() < v["startMs"].as_f64() {
+                bail!("Invalid asset interval");
+            }
+            let id = v["id"].as_str().unwrap_or_default().to_owned();
+            if !asset_ids.insert(id) {
+                bail!("Duplicate asset id");
+            }
+        }
+        records.push(v);
     }
     Ok(records)
 }
@@ -841,5 +908,34 @@ mod tests {
         let text = include_str!("../../../tests/fixtures/assets-sample.vpt");
         let report = report(&parse(text).unwrap(), ReportOptions::default());
         assert!(validator.is_valid(&report));
+    }
+
+    #[test]
+    fn append_records_validation() {
+        let existing = parse(
+            [
+                META,
+                "{\"type\":\"metrics\",\"timeMs\":1000,\"values\":{\"rssBytes\":100}}",
+            ]
+            .join("\n")
+            .as_str(),
+        )
+        .unwrap();
+        let ok = "{\"type\":\"frame\",\"timeMs\":1100,\"durationMs\":16.7,\"spike\":false}\n{\"type\":\"metrics\",\"timeMs\":1200,\"values\":{\"fps\":60,\"jsHeapBytes\":1000}}";
+        let out = parse_append(ok, &existing).unwrap();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["type"], "frame");
+
+        assert!(parse_append("{\"type\":\"metadata\",\"format\":\"vpt\",\"version\":1,\"source\":\"x\",\"startedAt\":\"2026-10-14T00:00:00Z\",\"profile\":\"lite\"}", &existing).is_err());
+        assert!(parse_append(
+            "{\"type\":\"end\",\"durationMs\":1,\"dropped\":{}}",
+            &existing
+        )
+        .is_err());
+        assert!(parse_append(
+            "{\"type\":\"metrics\",\"timeMs\":999,\"values\":{\"fps\":60}}",
+            &existing
+        )
+        .is_err());
     }
 }
