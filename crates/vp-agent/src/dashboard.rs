@@ -3,7 +3,7 @@
 use axum::{
     extract::{
         ws::{Message, WebSocketUpgrade},
-        DefaultBodyLimit, Request, State,
+        DefaultBodyLimit, Query, Request, State,
     },
     http::StatusCode,
     middleware::{self, Next},
@@ -13,6 +13,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 use std::{
+    collections::HashMap,
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
@@ -258,6 +259,30 @@ async fn trace(State(app): State<Arc<App>>) -> Result<Response, (StatusCode, Str
     )
         .into_response())
 }
+
+async fn report(
+    State(app): State<Arc<App>>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Response, (StatusCode, String)> {
+    let c = app.capture.lock().await;
+    if c.records.is_empty() {
+        return Err(failure("No capture or dump loaded"));
+    }
+    let include_trace = query.get("trace").is_none_or(|v| v != "0");
+    let value = vp_analyze::report(&c.records, vp_analyze::ReportOptions { include_trace });
+    let text = serde_json::to_string(&value).map_err(failure)?;
+    Ok((
+        [
+            ("content-type", "application/json"),
+            (
+                "content-disposition",
+                "attachment; filename=trace.report.json",
+            ),
+        ],
+        text,
+    )
+        .into_response())
+}
 fn encode(records: &[Value]) -> anyhow::Result<String> {
     let mut text = String::new();
     for v in records {
@@ -456,6 +481,7 @@ pub async fn serve(
         .route("/api/live", get(socket))
         .route("/api/start", post(start))
         .route("/api/trace", get(trace).post(import))
+        .route("/api/report", get(report))
         .route("/api/assets", get(assets))
         .route(
             "/api/analyze",
@@ -505,20 +531,30 @@ pub async fn serve(
             .map(|m| m.len())
             .sum::<u64>();
         let text = encode(&c.records)?;
-        if existing + text.len() as u64 <= 200 * 1024 * 1024 {
+        let report = serde_json::to_string_pretty(&vp_analyze::report(
+            &c.records,
+            vp_analyze::ReportOptions::default(),
+        ))?;
+        if existing + text.len() as u64 + report.len() as u64 <= 200 * 1024 * 1024 {
             use std::io::Write;
             use std::os::unix::fs::OpenOptionsExt;
-            let path = dir.join(format!(
-                "capture-{}.vpt",
-                chrono::Utc::now().format("%Y%m%d-%H%M%S-%f")
-            ));
-            let mut file = std::fs::OpenOptions::new()
+            let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S-%f").to_string();
+            let path = dir.join(format!("capture-{stamp}.vpt"));
+            let mut trace_file = std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .mode(0o600)
                 .open(&path)?;
-            file.write_all(text.as_bytes())?;
+            trace_file.write_all(text.as_bytes())?;
+            let report_path = dir.join(format!("capture-{stamp}.report.json"));
+            let mut report_file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&report_path)?;
+            report_file.write_all(report.as_bytes())?;
             println!("Flushed {}", path.display());
+            println!("Flushed {}", report_path.display());
         } else {
             eprintln!("Dump storage cap reached (200 MiB); export from the dashboard before ending a session or clear old dumps.");
         }
