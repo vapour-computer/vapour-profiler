@@ -240,6 +240,29 @@ async fn import(State(app): State<Arc<App>>, body: axum::body::Bytes) -> ApiResu
     capture.records = records;
     Ok(Json(json!({"ok":true})))
 }
+
+async fn append_records(State(app): State<Arc<App>>, body: axum::body::Bytes) -> ApiResult {
+    let text = std::str::from_utf8(&body).map_err(failure)?;
+    let mut capture = app.capture.lock().await;
+    if !capture.active {
+        return Err(failure("No active capture"));
+    }
+    let next = vp_analyze::parse_append(text, &capture.records).map_err(failure)?;
+    if next.is_empty() {
+        return Ok(Json(json!({"ok":true,"appended":0})));
+    }
+    let mut added = 0usize;
+    for record in &next {
+        added += serde_json::to_string(record).map_err(failure)?.len() + 1;
+    }
+    let existing = encode(&capture.records).map_err(failure)?.len();
+    if existing + added > MAX_TRACE {
+        return Err(failure("Dump cap reached"));
+    }
+    let appended = next.len();
+    capture.records.extend(next);
+    Ok(Json(json!({"ok":true,"appended":appended})))
+}
 async fn assets(State(app): State<Arc<App>>) -> Json<Value> {
     let c = app.capture.lock().await;
     Json(json!({"assets":vp_analyze::asset_report(&c.records)}))
@@ -481,6 +504,7 @@ pub async fn serve(
         .route("/api/live", get(socket))
         .route("/api/start", post(start))
         .route("/api/trace", get(trace).post(import))
+        .route("/api/records", post(append_records))
         .route("/api/report", get(report))
         .route("/api/assets", get(assets))
         .route(
