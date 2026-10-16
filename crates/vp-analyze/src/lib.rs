@@ -916,12 +916,13 @@ mod tests {
             [
                 META,
                 "{\"type\":\"metrics\",\"timeMs\":1000,\"values\":{\"rssBytes\":100}}",
+                "{\"type\":\"frame\",\"timeMs\":1000,\"durationMs\":16.7,\"spike\":false}",
             ]
             .join("\n")
             .as_str(),
         )
         .unwrap();
-        let ok = "{\"type\":\"frame\",\"timeMs\":1100,\"durationMs\":16.7,\"spike\":false}\n{\"type\":\"metrics\",\"timeMs\":1200,\"values\":{\"fps\":60,\"jsHeapBytes\":1000}}";
+        let ok = "{\"type\":\"frame\",\"timeMs\":1100,\"durationMs\":16.7,\"spike\":false}\n{\"type\":\"frame\",\"timeMs\":1200,\"durationMs\":20.0,\"spike\":false}";
         let out = parse_append(ok, &existing).unwrap();
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["type"], "frame");
@@ -933,7 +934,7 @@ mod tests {
         )
         .is_err());
         assert!(parse_append(
-            "{\"type\":\"metrics\",\"timeMs\":999,\"values\":{\"fps\":60}}",
+            "{\"type\":\"frame\",\"timeMs\":999,\"durationMs\":16.7,\"spike\":false}",
             &existing
         )
         .is_err());

@@ -24,6 +24,7 @@ use vp_analyze::{Provider, MAX_TRACE};
 type ApiResult = Result<Json<Value>, (StatusCode, String)>;
 struct Capture {
     records: Vec<Value>,
+    encoded_bytes: usize,
     active: bool,
     previous: Option<(u64, Instant)>,
     identity: Option<u64>,
@@ -206,9 +207,9 @@ async fn begin_capture(app: &App) -> Result<(), (StatusCode, String)> {
         return Err(failure("Already capturing"));
     }
     let (ticks, identity) = total_stat(pid, app.tree).map_err(failure)?;
-    c.records = vec![
-        json!({"type":"metadata","format":"vpt","version":1,"source":"native","adapter":"generic-proc","profile":"lite","startedAt":chrono::Utc::now().to_rfc3339(),"capabilities":{"cpu":true,"rss":true,"pss":"permission-dependent","fps":false,"stacks":false}}),
-    ];
+    let metadata = json!({"type":"metadata","format":"vpt","version":1,"source":"native","adapter":"generic-proc","profile":"lite","startedAt":chrono::Utc::now().to_rfc3339(),"capabilities":{"cpu":true,"rss":true,"pss":"permission-dependent","fps":false,"stacks":false}});
+    c.encoded_bytes = record_bytes(&metadata).map_err(failure)?;
+    c.records = vec![metadata];
     c.active = true;
     c.started = Instant::now();
     c.previous = Some((ticks, Instant::now()));
@@ -238,6 +239,7 @@ async fn import(State(app): State<Arc<App>>, body: axum::body::Bytes) -> ApiResu
         ));
     }
     capture.records = records;
+    capture.encoded_bytes = records_bytes(&capture.records).map_err(failure)?;
     Ok(Json(json!({"ok":true})))
 }
 
@@ -253,14 +255,14 @@ async fn append_records(State(app): State<Arc<App>>, body: axum::body::Bytes) ->
     }
     let mut added = 0usize;
     for record in &next {
-        added += serde_json::to_string(record).map_err(failure)?.len() + 1;
+        added += record_bytes(record).map_err(failure)?;
     }
-    let existing = encode(&capture.records).map_err(failure)?.len();
-    if existing + added > MAX_TRACE {
+    if capture.encoded_bytes + added > MAX_TRACE {
         return Err(failure("Dump cap reached"));
     }
     let appended = next.len();
     capture.records.extend(next);
+    capture.encoded_bytes += added;
     Ok(Json(json!({"ok":true,"appended":appended})))
 }
 async fn assets(State(app): State<Arc<App>>) -> Json<Value> {
@@ -317,6 +319,20 @@ fn encode(records: &[Value]) -> anyhow::Result<String> {
         text.push('\n');
     }
     Ok(text)
+}
+
+fn record_bytes(v: &Value) -> anyhow::Result<usize> {
+    Ok(serde_json::to_string(v)?.len() + 1)
+}
+
+fn records_bytes(records: &[Value]) -> anyhow::Result<usize> {
+    records.iter().try_fold(0usize, |acc, v| {
+        let next = acc + record_bytes(v)?;
+        if next > MAX_TRACE {
+            anyhow::bail!("Dump cap reached");
+        }
+        Ok(next)
+    })
 }
 async fn secret(action: &str, key: Option<&str>) -> anyhow::Result<String> {
     use tokio::io::AsyncWriteExt;
@@ -444,6 +460,7 @@ pub async fn serve(
         tree,
         capture: Mutex::new(Capture {
             records: vec![],
+            encoded_bytes: 0,
             active: false,
             previous: None,
             identity: None,
@@ -479,7 +496,11 @@ pub async fn serve(
                 let cores=unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) }.max(1) as usize;
                 let (rss,pss)=total_memory(pid,sampler.tree);let time=c.started.elapsed().as_secs_f64()*1000.;
                 if c.records.len()>=301{let _=sampler.shutdown.send(true);break;}
-                c.records.push(json!({"type":"metrics","timeMs":time,"values":{"cpuOneCorePercent":cpu,"cpuMachinePercent":cpu.map(|n|(n/cores as f64).min(100.)),"rssBytes":rss,"pssBytes":pss}}));
+                let record = json!({"type":"metrics","timeMs":time,"values":{"cpuOneCorePercent":cpu,"cpuMachinePercent":cpu.map(|n|(n/cores as f64).min(100.)),"rssBytes":rss,"pssBytes":pss}});
+                let add = match record_bytes(&record) { Ok(n) => n, Err(_) => {let _=sampler.shutdown.send(true); break;} };
+                if c.encoded_bytes + add > MAX_TRACE {let _=sampler.shutdown.send(true);break;}
+                c.records.push(record);
+                c.encoded_bytes += add;
                 c.previous=Some((ticks,now));
             }}
         }
@@ -544,8 +565,13 @@ pub async fn serve(
     let mut c = app.capture.lock().await;
     if c.active {
         let duration = c.started.elapsed().as_secs_f64() * 1000.;
-        c.records
-            .push(json!({"type":"end","durationMs":duration,"dropped":{}}));
+        let end = json!({"type":"end","durationMs":duration,"dropped":{}});
+        let end_bytes = record_bytes(&end)?;
+        if c.encoded_bytes + end_bytes > MAX_TRACE {
+            return Err(anyhow::anyhow!("Dump cap reached"));
+        }
+        c.records.push(end);
+        c.encoded_bytes += end_bytes;
         let dir = dump_dir();
         std::fs::create_dir_all(&dir)?;
         // Keep storage bounded; never overwrite or remove a user's existing dump.
@@ -615,5 +641,25 @@ mod tree_tests {
             total_stat(root, true).is_err(),
             "reaped root must be an error"
         );
+    }
+
+    #[test]
+    fn appended_frames_round_trip_through_encode_parse() {
+        let base = [
+            "{\"type\":\"metadata\",\"format\":\"vpt\",\"version\":1,\"source\":\"native\",\"startedAt\":\"2026-10-14T00:00:00Z\",\"profile\":\"lite\"}",
+            "{\"type\":\"metrics\",\"timeMs\":1000,\"values\":{\"rssBytes\":100}}",
+        ]
+        .join("\n");
+        let mut records = vp_analyze::parse(&base).unwrap();
+        let added = vp_analyze::parse_append(
+            "{\"type\":\"frame\",\"timeMs\":1100,\"durationMs\":16.7,\"spike\":false}",
+            &records,
+        )
+        .unwrap();
+        records.extend(added);
+        records.push(json!({"type":"end","durationMs":1200,"dropped":{}}));
+        let text = encode(&records).unwrap();
+        let parsed = vp_analyze::parse(&text).unwrap();
+        assert_eq!(parsed, records);
     }
 }
