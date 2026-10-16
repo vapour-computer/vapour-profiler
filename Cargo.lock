@@ -1997,8 +1997,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "serde_json",
  "tokio",
  "vp-agent",
+ "vp-analyze",
 ]
 
 [[package]]
@@ -2035,6 +2037,7 @@ name = "vp-analyze"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "jsonschema",
  "reqwest",
  "serde_json",
