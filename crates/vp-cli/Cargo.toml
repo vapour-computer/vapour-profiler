@@ -13,3 +13,5 @@ anyhow.workspace = true
 clap.workspace = true
 vp-agent.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+vp-analyze = { path = "../vp-analyze" }
+serde_json = "1"

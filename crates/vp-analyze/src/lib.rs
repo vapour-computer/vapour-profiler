@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::OnceLock;
 
 pub const MAX_TRACE: usize = 50 * 1024 * 1024;
@@ -193,6 +193,316 @@ pub fn asset_report(records: &[Value]) -> Vec<Value> {
     rows
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct ReportOptions {
+    pub include_trace: bool,
+}
+
+impl Default for ReportOptions {
+    fn default() -> Self {
+        Self {
+            include_trace: true,
+        }
+    }
+}
+
+fn mean(values: &[f64]) -> Option<f64> {
+    if values.is_empty() {
+        None
+    } else {
+        Some(values.iter().sum::<f64>() / values.len() as f64)
+    }
+}
+
+fn low_fps(slowest_desc: &[f64], fraction: f64) -> Option<f64> {
+    mean(
+        &slowest_desc
+            [..((slowest_desc.len() as f64 * fraction).ceil() as usize).min(slowest_desc.len())],
+    )
+    .map(|n| 1000. / n)
+}
+
+fn percentile_nearest_rank(sorted_asc: &[f64], p: f64) -> Option<f64> {
+    if sorted_asc.is_empty() {
+        return None;
+    }
+    let n = sorted_asc.len();
+    let rank = ((p.clamp(0., 1.) * n as f64).ceil() as usize)
+        .saturating_sub(1)
+        .min(n - 1);
+    Some(sorted_asc[rank])
+}
+
+fn stddev(values: &[f64], mean: f64) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64;
+    Some(variance.sqrt())
+}
+
+fn bytes_per_second(points: &[(f64, f64)]) -> Option<f64> {
+    if points.len() < 2 {
+        return None;
+    }
+    let x = points.iter().map(|p| p.0).sum::<f64>() / points.len() as f64;
+    let y = points.iter().map(|p| p.1).sum::<f64>() / points.len() as f64;
+    let variance = points.iter().map(|p| (p.0 - x).powi(2)).sum::<f64>();
+    if variance <= 0. {
+        None
+    } else {
+        Some(points.iter().map(|p| (p.0 - x) * (p.1 - y)).sum::<f64>() / variance)
+    }
+}
+
+fn stats_from_numeric_points(points: &[(f64, f64)]) -> Value {
+    if points.is_empty() {
+        return json!({"min":null,"max":null,"mean":null,"start":null,"end":null,"bytesPerSecond":null});
+    }
+    let values: Vec<f64> = points.iter().map(|p| p.1).collect();
+    let min = values.iter().copied().min_by(f64::total_cmp);
+    let max = values.iter().copied().max_by(f64::total_cmp);
+    json!({
+        "min": min,
+        "max": max,
+        "mean": mean(&values),
+        "start": points.first().map(|p| p.1),
+        "end": points.last().map(|p| p.1),
+        "bytesPerSecond": bytes_per_second(points),
+    })
+}
+
+fn frame_spikes(records: &[Value]) -> Vec<Value> {
+    let mut out = Vec::new();
+    let mut window: VecDeque<f64> = VecDeque::new();
+    for record in records.iter().filter(|v| v["type"] == "frame") {
+        let duration = record["durationMs"].as_f64().unwrap_or(0.);
+        if record["spike"] == true {
+            let mut values: Vec<f64> = window.iter().copied().collect();
+            values.sort_by(f64::total_cmp);
+            let median = if values.is_empty() {
+                None
+            } else {
+                Some(values[values.len() / 2])
+            };
+            out.push(json!({
+                "timeMs": record["timeMs"],
+                "durationMs": duration,
+                "medianMs": median,
+            }));
+        }
+        window.push_back(duration);
+        if window.len() > 120 {
+            window.pop_front();
+        }
+    }
+    out
+}
+
+fn end_record(records: &[Value]) -> Option<&Value> {
+    records.iter().rev().find(|v| v["type"] == "end")
+}
+
+fn max_capture_time(record: &Value) -> Option<f64> {
+    ["timeMs", "endMs", "startMs", "durationMs"]
+        .iter()
+        .filter_map(|k| record[*k].as_f64())
+        .max_by(f64::total_cmp)
+}
+
+pub fn report(records: &[Value], opts: ReportOptions) -> Value {
+    let mut kind_counts: BTreeMap<String, u64> = BTreeMap::new();
+    for record in records {
+        if let Some(kind) = record["type"].as_str() {
+            *kind_counts.entry(kind.to_string()).or_default() += 1;
+        }
+    }
+
+    let partial = records.last().is_none_or(|v| v["type"] != "end");
+    let duration_ms = end_record(records)
+        .and_then(|v| v["durationMs"].as_f64())
+        .or_else(|| {
+            records
+                .iter()
+                .filter_map(max_capture_time)
+                .max_by(f64::total_cmp)
+        })
+        .unwrap_or(0.);
+
+    let mut frame_durations: Vec<f64> = records
+        .iter()
+        .filter(|v| v["type"] == "frame")
+        .filter_map(|v| v["durationMs"].as_f64())
+        .collect();
+    let mut frame_durations_desc = frame_durations.clone();
+    frame_durations_desc.sort_by(|a, b| b.total_cmp(a));
+    frame_durations.sort_by(f64::total_cmp);
+
+    let frame_mean = mean(&frame_durations);
+    let frame_histogram_limits = [8.3, 16.7, 33.3, 50.0, 100.0];
+    let mut histogram_counts = vec![0_u64; frame_histogram_limits.len() + 1];
+    for duration in frame_durations.iter().copied() {
+        let idx = frame_histogram_limits
+            .iter()
+            .position(|limit| duration <= *limit)
+            .unwrap_or(frame_histogram_limits.len());
+        histogram_counts[idx] += 1;
+    }
+    let histogram: Vec<Value> = frame_histogram_limits
+        .iter()
+        .enumerate()
+        .map(|(i, up_to)| json!({"upTo": up_to, "count": histogram_counts[i]}))
+        .chain(std::iter::once(
+            json!({"upTo": null, "count": histogram_counts[frame_histogram_limits.len()]}),
+        ))
+        .collect();
+
+    let mut symbols: BTreeMap<String, u64> = BTreeMap::new();
+    let mut stacks: Vec<Value> = Vec::new();
+    let mut metric_series: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    let mut metric_points: BTreeMap<String, Vec<(f64, f64)>> = BTreeMap::new();
+    for record in records {
+        if record["type"] == "stack" {
+            if let (Some(stack), Some(samples)) =
+                (record["stack"].as_str(), record["samples"].as_u64())
+            {
+                let name = stack
+                    .rsplit(';')
+                    .next()
+                    .unwrap_or(stack)
+                    .chars()
+                    .take(128)
+                    .collect::<String>();
+                let count = symbols.entry(name).or_default();
+                *count = count.saturating_add(samples);
+                stacks.push(json!({"stack": stack, "samples": samples}));
+            }
+        }
+        if record["type"] == "metrics" {
+            if let (Some(time), Some(values)) =
+                (record["timeMs"].as_f64(), record["values"].as_object())
+            {
+                for (name, value) in values {
+                    metric_series
+                        .entry(name.clone())
+                        .or_default()
+                        .push(json!([time, value]));
+                    if let Some(number) = value.as_f64() {
+                        metric_points
+                            .entry(name.clone())
+                            .or_default()
+                            .push((time / 1000., number));
+                    }
+                }
+            }
+        }
+    }
+    stacks.sort_by(|a, b| {
+        b["samples"]
+            .as_u64()
+            .unwrap_or(0)
+            .cmp(&a["samples"].as_u64().unwrap_or(0))
+    });
+
+    let mut metric_stats = BTreeMap::new();
+    for name in metric_series.keys() {
+        let points = metric_points
+            .get(name)
+            .map(|p| p.as_slice())
+            .unwrap_or_default();
+        metric_stats.insert(name.clone(), stats_from_numeric_points(points));
+    }
+
+    let mut functions: Vec<_> = symbols.into_iter().collect();
+    functions.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+    let total_samples = functions.iter().map(|(_, n)| *n).sum::<u64>() as f64;
+    let functions: Vec<Value> = functions
+        .into_iter()
+        .map(|(function, self_samples)| {
+            json!({
+                "function": function,
+                "selfSamples": self_samples,
+                "share": if total_samples > 0. { Some(self_samples as f64 / total_samples * 100.) } else { None },
+            })
+        })
+        .collect();
+
+    let cpu_points = metric_points
+        .get("cpuOneCorePercent")
+        .map(|p| p.iter().map(|(_, v)| *v).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let cpu_peak = cpu_points.iter().copied().max_by(f64::total_cmp);
+
+    let mut memory_by_kind = serde_json::Map::new();
+    for key in ["wasmBytes", "rssBytes", "pssBytes", "jsHeapBytes"] {
+        memory_by_kind.insert(
+            key.to_string(),
+            stats_from_numeric_points(
+                metric_points
+                    .get(key)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            ),
+        );
+    }
+
+    let assets = asset_report(records);
+    let mut report = json!({
+        "format": "vp-report",
+        "version": 1,
+        "generatedAt": chrono::Utc::now().to_rfc3339(),
+        "partial": partial,
+        "metadata": records.first().cloned(),
+        "capture": {
+            "durationMs": duration_ms,
+            "records": kind_counts,
+            "dropped": end_record(records).map(|v| v["dropped"].clone()).unwrap_or_else(|| json!({})),
+        },
+        "frames": {
+            "count": frame_durations.len(),
+            "fps": {
+                "average": frame_mean.map(|n| 1000. / n),
+                "low1": low_fps(&frame_durations_desc, 0.01),
+                "low01": low_fps(&frame_durations_desc, 0.001),
+            },
+            "frameTimeMs": {
+                "min": frame_durations.first().copied(),
+                "p50": percentile_nearest_rank(&frame_durations, 0.50),
+                "p90": percentile_nearest_rank(&frame_durations, 0.90),
+                "p95": percentile_nearest_rank(&frame_durations, 0.95),
+                "p99": percentile_nearest_rank(&frame_durations, 0.99),
+                "max": frame_durations.last().copied(),
+                "mean": frame_mean,
+                "stddev": frame_mean.and_then(|n| stddev(&frame_durations, n)),
+            },
+            "histogramMs": histogram,
+            "spikes": frame_spikes(records),
+        },
+        "metrics": {
+            "series": metric_series,
+            "stats": metric_stats,
+        },
+        "cpu": {
+            "averageOneCorePercent": mean(&cpu_points),
+            "peakOneCorePercent": cpu_peak,
+        },
+        "memory": {
+            "growEvents": records.iter().filter(|v| v["type"] == "memory").cloned().collect::<Vec<_>>(),
+            "byKind": memory_by_kind,
+        },
+        "functions": functions,
+        "stacks": stacks,
+        "assets": assets,
+        "spikes": records.iter().filter(|v| v["type"] == "spike").cloned().collect::<Vec<_>>(),
+        "probes": records.iter().filter(|v| v["type"] == "probe").cloned().collect::<Vec<_>>(),
+        "limitations": "Retained data only. Derived values are approximate. Samples are not CPU utilization. Memory growth is not proof of a leak. No per-function spike causality is inferred.",
+    });
+    if opts.include_trace {
+        report["trace"] = json!(records);
+    }
+    report
+}
+
 pub fn summarize(records: &[Value]) -> Value {
     let mut durations: Vec<f64> = records
         .iter()
@@ -200,20 +510,6 @@ pub fn summarize(records: &[Value]) -> Value {
         .filter_map(|v| v["durationMs"].as_f64())
         .collect();
     durations.sort_by(|a, b| b.total_cmp(a));
-    let mean = |v: &[f64]| {
-        if v.is_empty() {
-            None
-        } else {
-            Some(v.iter().sum::<f64>() / v.len() as f64)
-        }
-    };
-    let low = |fraction: f64| {
-        mean(
-            &durations
-                [..((durations.len() as f64 * fraction).ceil() as usize).min(durations.len())],
-        )
-        .map(|n| 1000. / n)
-    };
     let mut symbols: BTreeMap<String, u64> = BTreeMap::new();
     let mut memory: BTreeMap<&str, Vec<(f64, f64)>> = BTreeMap::new();
     let mut cpu = Vec::new();
@@ -247,7 +543,7 @@ pub fn summarize(records: &[Value]) -> Value {
     functions.sort_by_key(|a| std::cmp::Reverse(a.1));
     functions.truncate(20);
     let mut evidence = BTreeMap::new();
-    let fps = json!({"average":mean(&durations).map(|n|1000./n),"low1":low(0.01),"low01":low(0.001),"frames":durations.len(),"spikes":records.iter().filter(|v|v["type"]=="frame" && v["spike"]==true).count()});
+    let fps = json!({"average":mean(&durations).map(|n|1000./n),"low1":low_fps(&durations,0.01),"low01":low_fps(&durations,0.001),"frames":durations.len(),"spikes":records.iter().filter(|v|v["type"]=="frame" && v["spike"]==true).count()});
     evidence.insert("frames".to_string(), fps);
     for (i, (name, n)) in functions.iter().enumerate() {
         evidence.insert(
@@ -256,15 +552,7 @@ pub fn summarize(records: &[Value]) -> Value {
         );
     }
     for (name, points) in memory {
-        let x = points.iter().map(|p| p.0).sum::<f64>() / points.len() as f64;
-        let y = points.iter().map(|p| p.1).sum::<f64>() / points.len() as f64;
-        let variance = points.iter().map(|p| (p.0 - x).powi(2)).sum::<f64>();
-        let slope = if variance > 0. {
-            points.iter().map(|p| (p.0 - x) * (p.1 - y)).sum::<f64>() / variance
-        } else {
-            0.
-        };
-        evidence.insert(name.to_string(),json!({"start":points.first().unwrap().1,"end":points.last().unwrap().1,"peak":points.iter().map(|p|p.1).fold(0.,f64::max),"bytesPerSecond":slope,"points":points.len()}));
+        evidence.insert(name.to_string(),json!({"start":points.first().unwrap().1,"end":points.last().unwrap().1,"peak":points.iter().map(|p|p.1).fold(0.,f64::max),"bytesPerSecond":bytes_per_second(&points).unwrap_or(0.),"points":points.len()}));
     }
     let assets = asset_report(records);
     if !assets.is_empty() {
@@ -474,5 +762,84 @@ mod tests {
         let summary = summarize(&parse(&text).unwrap());
         assert_eq!(summary["evidence"]["asset_0"]["asset"], "big.png");
         assert_eq!(summary["evidence"]["assets"]["count"], 3);
+    }
+
+    #[test]
+    fn report_contract_checks() {
+        let text = [
+            META.to_string(),
+            "{\"type\":\"metrics\",\"timeMs\":0,\"values\":{\"rssBytes\":100,\"cpuOneCorePercent\":25,\"fps\":null,\"busySource\":\"unsupported\"}}".to_string(),
+            "{\"type\":\"metrics\",\"timeMs\":1000,\"values\":{\"rssBytes\":200,\"cpuOneCorePercent\":75,\"visibility\":\"visible\"}}".to_string(),
+            "{\"type\":\"frame\",\"timeMs\":10,\"durationMs\":10,\"spike\":false}".to_string(),
+            "{\"type\":\"frame\",\"timeMs\":20,\"durationMs\":20,\"spike\":false}".to_string(),
+            "{\"type\":\"frame\",\"timeMs\":40,\"durationMs\":40,\"spike\":true}".to_string(),
+            "{\"type\":\"frame\",\"timeMs\":80,\"durationMs\":80,\"spike\":true}".to_string(),
+            "{\"type\":\"end\",\"durationMs\":1000,\"dropped\":{}}".to_string(),
+        ]
+        .join("\n");
+        let records = parse(&text).unwrap();
+        let out = report(&records, ReportOptions::default());
+
+        for key in [
+            "rssBytes",
+            "cpuOneCorePercent",
+            "fps",
+            "busySource",
+            "visibility",
+        ] {
+            assert!(
+                out["metrics"]["series"][key].is_array(),
+                "missing series key {key}"
+            );
+            assert!(
+                out["metrics"]["stats"][key].is_object(),
+                "missing stats key {key}"
+            );
+        }
+        assert!(out["metrics"]["series"]["fps"][0][1].is_null());
+        assert!(out["metrics"]["stats"]["fps"]["mean"].is_null());
+        assert_eq!(out["frames"]["frameTimeMs"]["p50"], 20.0);
+        assert_eq!(out["frames"]["frameTimeMs"]["p90"], 80.0);
+        assert_eq!(out["frames"]["fps"]["low1"], 12.5);
+        assert_eq!(out["frames"]["fps"]["low01"], 12.5);
+        assert_eq!(out["partial"], false);
+        assert_eq!(out["trace"], json!(records));
+
+        let no_trace = report(
+            &records,
+            ReportOptions {
+                include_trace: false,
+            },
+        );
+        assert!(no_trace.get("trace").is_none());
+    }
+
+    #[test]
+    fn report_marks_partial_when_end_missing() {
+        let text = [
+            META.to_string(),
+            "{\"type\":\"metrics\",\"timeMs\":0,\"values\":{\"rssBytes\":100}}".to_string(),
+        ]
+        .join("\n");
+        let records = parse(&text).unwrap();
+        let report = report(&records, ReportOptions::default());
+        assert_eq!(report["partial"], true);
+    }
+
+    #[test]
+    fn report_schema_validates_fixture() {
+        static SCHEMA: OnceLock<jsonschema::Validator> = OnceLock::new();
+        let validator = SCHEMA.get_or_init(|| {
+            jsonschema::validator_for(
+                &serde_json::from_str::<Value>(include_str!(
+                    "../../../docs/schema/vp-report-v1.schema.json"
+                ))
+                .unwrap(),
+            )
+            .unwrap()
+        });
+        let text = include_str!("../../../tests/fixtures/assets-sample.vpt");
+        let report = report(&parse(text).unwrap(), ReportOptions::default());
+        assert!(validator.is_valid(&report));
     }
 }

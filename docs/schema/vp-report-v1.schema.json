@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/vapour-computer/vapour-profiler/main/docs/schema/vp-report-v1.schema.json",
+  "title": "Vapour Profiler Report v1",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "generatedAt",
+    "partial",
+    "metadata",
+    "capture",
+    "frames",
+    "metrics",
+    "cpu",
+    "memory",
+    "functions",
+    "stacks",
+    "assets",
+    "spikes",
+    "probes",
+    "limitations"
+  ],
+  "properties": {
+    "format": { "const": "vp-report" },
+    "version": { "const": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "partial": { "type": "boolean" },
+    "metadata": { "type": ["object", "null"] },
+    "capture": {
+      "type": "object",
+      "required": ["durationMs", "records", "dropped"],
+      "properties": {
+        "durationMs": { "type": "number", "minimum": 0 },
+        "records": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "dropped": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } }
+      },
+      "additionalProperties": false
+    },
+    "frames": {
+      "type": "object",
+      "required": ["count", "fps", "frameTimeMs", "histogramMs", "spikes"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "fps": {
+          "type": "object",
+          "required": ["average", "low1", "low01"],
+          "properties": {
+            "average": { "$ref": "#/$defs/nullableNumber" },
+            "low1": { "$ref": "#/$defs/nullableNumber" },
+            "low01": { "$ref": "#/$defs/nullableNumber" }
+          },
+          "additionalProperties": false
+        },
+        "frameTimeMs": {
+          "type": "object",
+          "required": ["min", "p50", "p90", "p95", "p99", "max", "mean", "stddev"],
+          "properties": {
+            "min": { "$ref": "#/$defs/nullableNumber" },
+            "p50": { "$ref": "#/$defs/nullableNumber" },
+            "p90": { "$ref": "#/$defs/nullableNumber" },
+            "p95": { "$ref": "#/$defs/nullableNumber" },
+            "p99": { "$ref": "#/$defs/nullableNumber" },
+            "max": { "$ref": "#/$defs/nullableNumber" },
+            "mean": { "$ref": "#/$defs/nullableNumber" },
+            "stddev": { "$ref": "#/$defs/nullableNumber" }
+          },
+          "additionalProperties": false
+        },
+        "histogramMs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["upTo", "count"],
+            "properties": {
+              "upTo": { "type": ["number", "null"] },
+              "count": { "type": "integer", "minimum": 0 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "spikes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["timeMs", "durationMs", "medianMs"],
+            "properties": {
+              "timeMs": { "type": "number", "minimum": 0 },
+              "durationMs": { "type": "number", "exclusiveMinimum": 0 },
+              "medianMs": { "$ref": "#/$defs/nullableNumber" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "metrics": {
+      "type": "object",
+      "required": ["series", "stats"],
+      "properties": {
+        "series": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
+        "stats": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["min", "max", "mean", "start", "end", "bytesPerSecond"],
+            "properties": {
+              "min": { "$ref": "#/$defs/nullableNumber" },
+              "max": { "$ref": "#/$defs/nullableNumber" },
+              "mean": { "$ref": "#/$defs/nullableNumber" },
+              "start": { "$ref": "#/$defs/nullableNumber" },
+              "end": { "$ref": "#/$defs/nullableNumber" },
+              "bytesPerSecond": { "$ref": "#/$defs/nullableNumber" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "cpu": {
+      "type": "object",
+      "required": ["averageOneCorePercent", "peakOneCorePercent"],
+      "properties": {
+        "averageOneCorePercent": { "$ref": "#/$defs/nullableNumber" },
+        "peakOneCorePercent": { "$ref": "#/$defs/nullableNumber" }
+      },
+      "additionalProperties": false
+    },
+    "memory": {
+      "type": "object",
+      "required": ["growEvents", "byKind"],
+      "properties": {
+        "growEvents": { "type": "array", "items": { "type": "object" } },
+        "byKind": { "type": "object", "additionalProperties": { "type": "object" } }
+      },
+      "additionalProperties": false
+    },
+    "functions": { "type": "array", "items": { "type": "object" } },
+    "stacks": { "type": "array", "items": { "type": "object" } },
+    "assets": { "type": "array", "items": { "type": "object" } },
+    "spikes": { "type": "array", "items": { "type": "object" } },
+    "probes": { "type": "array", "items": { "type": "object" } },
+    "limitations": { "type": "string", "minLength": 1 },
+    "trace": { "type": "array", "items": { "type": "object" } }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "nullableNumber": { "type": ["number", "null"] }
+  }
+}
